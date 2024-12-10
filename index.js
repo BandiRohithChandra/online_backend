@@ -12,7 +12,15 @@ app.use(express.json());
 
 // Set up SQLite database
 const dbPath = path.resolve(__dirname, './library.db');
-const db = new sqlite3.Database(dbPath);
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+      console.error('Database connection error:', err.message);
+    } else {
+      console.log('Connected to SQLite database.');
+      db.run('PRAGMA foreign_keys = ON;'); // Enable foreign key constraints
+    }
+  });
+  
 
 // Create tables if they do not exist
 db.serialize(() => {
@@ -53,17 +61,22 @@ db.serialize(() => {
 
 // GET all books
 app.get('/books', (req, res) => {
-  const query = `
-    SELECT b.bookid, b.title, a.name AS author, g.name AS genre, b.pages, b.publishedDate
-    FROM books b
-    JOIN authors a ON b.authorid = a.authorid
-    JOIN genres g ON b.genreid = g.genreid
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    const { page = 1, limit = 10 } = req.query;
+    const offset = (page - 1) * limit;
+  
+    const query = `
+      SELECT b.bookid, b.title, a.name AS author, g.name AS genre, b.pages, b.publishedDate
+      FROM books b
+      JOIN authors a ON b.authorid = a.authorid
+      JOIN genres g ON b.genreid = g.genreid
+      LIMIT ? OFFSET ?
+    `;
+    db.all(query, [limit, offset], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    });
   });
-});
+  
 
 app.get('/books/:id', (req, res) => {
     const { id } = req.params;
