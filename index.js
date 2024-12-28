@@ -1,5 +1,5 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');  // Import better-sqlite3
 const cors = require('cors');
 const path = require('path');
 
@@ -17,83 +17,77 @@ app.use(express.json());
 
 // Set up SQLite database
 const dbPath = path.resolve(__dirname, './library.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Database connection error:', err.message);
-    } else {
-        console.log('Connected to SQLite database.');
-        db.run('PRAGMA foreign_keys = ON;'); // Enable foreign key constraints
-    }
-});
+const db = new Database(dbPath, { verbose: console.log });  // Using better-sqlite3
+
+// Enable foreign key support (if needed)
+db.pragma('foreign_keys = ON');
 
 // Create tables if they do not exist
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS authors (
-      authorid INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL
-    );
-  `);
+try {
+  db.transaction(() => {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS authors (
+        authorid INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL
+      );
+    `).run();
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS genres (
-      genreid INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
-      description TEXT
-    );
-  `);
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS genres (
+        genreid INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT
+      );
+    `).run();
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS books (
-      bookid INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      authorid INTEGER,
-      genreid INTEGER,
-      pages INTEGER,
-      publishedDate TEXT,
-      FOREIGN KEY (authorid) REFERENCES authors (authorid),
-      FOREIGN KEY (genreid) REFERENCES genres (genreid)
-    );
-  `);
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS books (
+        bookid INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        authorid INTEGER,
+        genreid INTEGER,
+        pages INTEGER,
+        publishedDate TEXT,
+        FOREIGN KEY (authorid) REFERENCES authors (authorid),
+        FOREIGN KEY (genreid) REFERENCES genres (genreid)
+      );
+    `).run();
 
-  // Authors
-  const authors = ['J.K. Rowling', 'George Orwell', 'J.R.R. Tolkien', 'Harper Lee'];
-  authors.forEach((author) => {
-    db.run('INSERT OR IGNORE INTO authors (name) VALUES (?)', [author]);
-  });
+    // Authors
+    const authors = ['J.K. Rowling', 'George Orwell', 'J.R.R. Tolkien', 'Harper Lee'];
+    authors.forEach((author) => {
+      db.prepare('INSERT OR IGNORE INTO authors (name) VALUES (?)').run(author);
+    });
 
-  // Genres
-  const genres = [
-    { name: 'Fantasy', description: 'A genre of speculative fiction involving magic and mythical creatures' },
-    { name: 'Dystopian', description: 'A genre of speculative fiction set in a futuristic society with oppression and control' },
-    { name: 'Fiction', description: 'A genre of narrative fiction based on real-life experiences' },
-  ];
-  genres.forEach(({ name, description }) => {
-    db.run('INSERT OR IGNORE INTO genres (name, description) VALUES (?, ?)', [name, description]);
-  });
+    // Genres
+    const genres = [
+      { name: 'Fantasy', description: 'A genre of speculative fiction involving magic and mythical creatures' },
+      { name: 'Dystopian', description: 'A genre of speculative fiction set in a futuristic society with oppression and control' },
+      { name: 'Fiction', description: 'A genre of narrative fiction based on real-life experiences' },
+    ];
+    genres.forEach(({ name, description }) => {
+      db.prepare('INSERT OR IGNORE INTO genres (name, description) VALUES (?, ?)').run(name, description);
+    });
 
-  // Books
-  const books = [
-    { title: "Harry Potter and the Sorcerer's Stone", author: 'J.K. Rowling', genre: 'Fantasy', pages: 309, publishedDate: '1997-06-26' },
-    { title: '1984', author: 'George Orwell', genre: 'Dystopian', pages: 328, publishedDate: '1949-06-08' },
-    { title: 'The Hobbit', author: 'J.R.R. Tolkien', genre: 'Fantasy', pages: 310, publishedDate: '1937-09-21' },
-    { title: 'To Kill a Mockingbird', author: 'Harper Lee', genre: 'Fiction', pages: 324, publishedDate: '1960-07-11' },
-  ];
-  books.forEach(({ title, author, genre, pages, publishedDate }) => {
-    db.get(
-      `SELECT a.authorid, g.genreid FROM authors a, genres g WHERE a.name = ? AND g.name = ?`,
-      [author, genre],
-      (err, row) => {
-        if (row) {
-          db.run(
-            `INSERT OR IGNORE INTO books (title, authorid, genreid, pages, publishedDate) VALUES (?, ?, ?, ?, ?)`,
-            [title, row.authorid, row.genreid, pages, publishedDate]
-          );
-        }
+    // Books
+    const books = [
+      { title: "Harry Potter and the Sorcerer's Stone", author: 'J.K. Rowling', genre: 'Fantasy', pages: 309, publishedDate: '1997-06-26' },
+      { title: '1984', author: 'George Orwell', genre: 'Dystopian', pages: 328, publishedDate: '1949-06-08' },
+      { title: 'The Hobbit', author: 'J.R.R. Tolkien', genre: 'Fantasy', pages: 310, publishedDate: '1937-09-21' },
+      { title: 'To Kill a Mockingbird', author: 'Harper Lee', genre: 'Fiction', pages: 324, publishedDate: '1960-07-11' },
+    ];
+    books.forEach(({ title, author, genre, pages, publishedDate }) => {
+      const authorRow = db.prepare('SELECT authorid FROM authors WHERE name = ?').get(author);
+      const genreRow = db.prepare('SELECT genreid FROM genres WHERE name = ?').get(genre);
+      if (authorRow && genreRow) {
+        db.prepare('INSERT OR IGNORE INTO books (title, authorid, genreid, pages, publishedDate) VALUES (?, ?, ?, ?, ?)')
+          .run(title, authorRow.authorid, genreRow.genreid, pages, publishedDate);
       }
-    );
-  });
-});
+    });
+  })(); // Invoke the transaction immediately
+} catch (err) {
+  console.error('Error setting up the database:', err);
+}
 
 // Utility function for error responses
 const errorResponse = (res, status, message) => {
@@ -113,10 +107,8 @@ app.get('/books', (req, res) => {
     LIMIT ? OFFSET ?
   `;
 
-  db.all(query, [parseInt(limit), parseInt(offset)], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+  const rows = db.prepare(query).all(parseInt(limit), parseInt(offset));
+  res.json(rows);
 });
 
 // GET a single book by ID
@@ -130,11 +122,9 @@ app.get('/books/:id', (req, res) => {
         WHERE b.bookid = ?
     `;
 
-    db.get(query, [id], (err, row) => {
-        if (err) return errorResponse(res, 500, err.message);
-        if (!row) return errorResponse(res, 404, 'Book not found');
-        res.json(row);
-    });
+    const row = db.prepare(query).get(id);
+    if (!row) return errorResponse(res, 404, 'Book not found');
+    res.json(row);
 });
 
 // POST a new book
@@ -150,10 +140,8 @@ app.post('/books', (req, res) => {
         VALUES (?, ?, ?, ?, ?)
     `;
 
-    db.run(query, [title, authorid, genreid, pages, publishedDate], function (err) {
-        if (err) return errorResponse(res, 500, err.message);
-        res.status(201).json({ bookid: this.lastID });
-    });
+    const result = db.prepare(query).run(title, authorid, genreid, pages, publishedDate);
+    res.status(201).json({ bookid: result.lastInsertRowid });
 });
 
 // PUT update a book
@@ -170,11 +158,9 @@ app.put('/books/:id', (req, res) => {
         WHERE bookid = ?
     `;
 
-    db.run(query, [title, authorid, genreid, pages, publishedDate, id], function (err) {
-        if (err) return errorResponse(res, 500, err.message);
-        if (this.changes === 0) return errorResponse(res, 404, 'Book not found');
-        res.json({ message: 'Book updated successfully' });
-    });
+    const result = db.prepare(query).run(title, authorid, genreid, pages, publishedDate, id);
+    if (result.changes === 0) return errorResponse(res, 404, 'Book not found');
+    res.json({ message: 'Book updated successfully' });
 });
 
 // DELETE a book
@@ -182,32 +168,23 @@ app.delete('/books/:id', (req, res) => {
     const { id } = req.params;
 
     const query = `DELETE FROM books WHERE bookid = ?`;
-
-    db.run(query, [id], function (err) {
-        if (err) return errorResponse(res, 500, err.message);
-        if (this.changes === 0) return errorResponse(res, 404, 'Book not found');
-        res.json({ message: 'Book deleted successfully' });
-    });
+    const result = db.prepare(query).run(id);
+    if (result.changes === 0) return errorResponse(res, 404, 'Book not found');
+    res.json({ message: 'Book deleted successfully' });
 });
 
 // GET all authors
 app.get('/authors', (req, res) => {
     const query = `SELECT * FROM authors`;
-
-    db.all(query, [], (err, rows) => {
-        if (err) return errorResponse(res, 500, err.message);
-        res.json(rows);
-    });
+    const rows = db.prepare(query).all();
+    res.json(rows);
 });
 
 // GET all genres
 app.get('/genres', (req, res) => {
     const query = `SELECT * FROM genres`;
-
-    db.all(query, [], (err, rows) => {
-        if (err) return errorResponse(res, 500, err.message);
-        res.json(rows);
-    });
+    const rows = db.prepare(query).all();
+    res.json(rows);
 });
 
 // Start the server
